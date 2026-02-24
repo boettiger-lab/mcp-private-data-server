@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: duckdb-mcp-private
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: duckdb-mcp-private
+  template:
+    metadata:
+      labels:
+        app: duckdb-mcp-private
+    spec:
+      containers:
+      - name: server
+        image: astral/uv:python3.12-bookworm-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            apt-get update && apt-get install -y git && \
+            git clone https://github.com/boettiger-lab/mcp-private-data-server.git /app && \
+            cd /app && \
+            uv run --with "mcp" --with "duckdb" --with pandas --with uvicorn --with tabulate server.py
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mcp-private-secrets
+              key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mcp-private-secrets
+              key: aws-secret-access-key
+        - name: MCP_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mcp-private-secrets
+              key: mcp-auth-token
+        resources:
+          requests:
+            memory: 16Gi
+            cpu: 2
+          limits:
+            memory: 160Gi
+            cpu: 8
+        ports:
+        - containerPort: 8000
+        readinessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 15  # Give 'uv' time to install deps
+          periodSeconds: 5
+          failureThreshold: 5
