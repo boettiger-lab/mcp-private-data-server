@@ -7,6 +7,9 @@
 # Kubernetes secrets — never commit filled-in secret files
 k8s/secret.yaml
 
+# MCP config contains live auth token — never commit
+.mcp.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

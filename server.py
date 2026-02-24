@@ -77,17 +77,17 @@ def get_isolated_db():
     conn = duckdb.connect(database=":memory:")
     try:
         if SETUP_SQL: conn.sql(SETUP_SQL)
-        # Override S3 credentials from environment variables if provided.
-        # This runs after SETUP_SQL so it replaces the empty-credential secret.
-        if S3_KEY_ID or S3_SECRET_KEY:
-            key_id = S3_KEY_ID.replace("'", "''")
-            secret = S3_SECRET_KEY.replace("'", "''")
-            conn.sql(
-                f"CREATE OR REPLACE SECRET s3 (TYPE S3, "
-                f"ENDPOINT 'rook-ceph-rgw-nautiluss3.rook', "
-                f"URL_STYLE 'path', USE_SSL 'false', "
-                f"KEY_ID '{key_id}', SECRET '{secret}');"
-            )
+        # Always override S3 credentials from environment variables.
+        # Runs after SETUP_SQL so env vars are the unconditional source of truth.
+        # Set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the k8s Secret.
+        key_id = S3_KEY_ID.replace("'", "''")
+        secret = S3_SECRET_KEY.replace("'", "''")
+        conn.sql(
+            f"CREATE OR REPLACE SECRET s3 (TYPE S3, "
+            f"ENDPOINT 'rook-ceph-rgw-nautiluss3.rook', "
+            f"URL_STYLE 'path', USE_SSL 'false', "
+            f"KEY_ID '{key_id}', SECRET '{secret}');"
+        )
         yield conn
     finally:
         conn.close()
