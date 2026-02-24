@@ -3,6 +3,7 @@
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server providing authenticated SQL query access to private geospatial datasets stored in S3. Built with DuckDB for high-performance analytics on H3-indexed environmental and land data.
 
 **Endpoint:** `https://private-duckdb-mcp.nrp-nautilus.io/mcp`
+**Hosted on:** [NRP Nautilus](https://nautilus.optiputer.net) Kubernetes cluster — namespace `biodiversity`, deployment `duckdb-mcp-private`
 
 > **Authentication required.** Every request must include a Bearer token. See [Authentication](#authentication) below.
 
