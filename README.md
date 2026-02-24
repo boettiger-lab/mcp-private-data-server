@@ -1,247 +1,251 @@
-# MCP DuckDB Geospatial Data Server
+# Private MCP DuckDB Geospatial Data Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides SQL query access to large-scale geospatial datasets stored in S3. Built with DuckDB for high-performance analytics on H3-indexed environmental, biodiversity, and geospatial data.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server providing authenticated SQL query access to private geospatial datasets stored in S3. Built with DuckDB for high-performance analytics on H3-indexed environmental and land data.
 
-## Quick Start
+**Endpoint:** `https://private-duckdb-mcp.nrp-nautilus.io/mcp`
 
-Add the hosted MCP endpoint to your LLM client, like so: 
+> **Authentication required.** Every request must include a Bearer token. See [Authentication](#authentication) below.
 
+---
 
-### Using VSCode
+## Authentication
 
-create a  `.vscode/mcp.json` like this: ([as in this repo](.vscode/mcp.json))
+All requests to this server require a Bearer token in the `Authorization` header:
 
-```json
-{
-	"servers": {
-		"duckdb-geo": {
-			"url": "https://duckdb-mcp.nrp-nautilus.io/mcp"
-		}
-	}
-}
+```
+Authorization: Bearer <token>
 ```
 
- 
-Now simply ask your chat client a question about the datasets and it should answer by querying the database in SQL:
+Requests without a valid token receive a `401 Unauthorized` response. CORS preflight (`OPTIONS`) requests are exempt so that browser-based clients work correctly.
 
-Examples:
+### Retrieving the token
 
-- What fraction of Australia is protected area?  
+The token is stored as a Kubernetes secret in the `biodiversity` namespace:
 
+```bash
+kubectl get secret mcp-private-secrets -n biodiversity \
+  -o jsonpath='{.data.mcp-auth-token}' | base64 -d
+```
 
-![alt text](docs/img/image.png)
+---
 
+## Client Configuration
 
+### Claude Code (CLI)
 
-### Using Claude Code (Desktop)
-
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
-**Linux**: `~/.config/Claude/claude_desktop_config.json`
+Add a `.mcp.json` file to your project root (this file is gitignored in this repo — never commit it):
 
 ```json
 {
   "mcpServers": {
-    "duckdb-geo": {
-      "url": "https://duckdb-mcp.nrp-nautilus.io/mcp"
+    "private-duckdb": {
+      "type": "http",
+      "url": "https://private-duckdb-mcp.nrp-nautilus.io/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
     }
   }
 }
 ```
 
-After adding the configuration, restart Claude Desktop.
+### Claude Desktop
 
+Add to your Claude Desktop configuration file:
 
-
-
-## Features
-
-- **Zero-Configuration SQL Access**: Query petabytes of geospatial data without database setup
-- **H3 Geospatial Indexing**: Efficient spatial operations using Uber's H3 hexagonal grid system
-- **Isolated Execution**: Each query runs in a fresh DuckDB instance for security
-- **Stateless HTTP Mode**: Fully horizontally scalable for cloud deployment
-- **Rich Dataset Catalog**: Access to 10+ curated environmental and biodiversity datasets
-- **MCP Resources & Prompts**: Browse datasets and get query guidance through MCP protocol
-
-## Available Datasets
-
-The example configuration provides access to the following datasets via S3:
-
-1. **GLWD** - Global Lakes and Wetlands Database
-2. **Vulnerable Carbon** - Conservation International carbon vulnerability data
-3. **NCP** - Nature Contributions to People biodiversity scores
-4. **Countries & Regions** - Global administrative boundaries (Overture Maps)
-5. **WDPA** - World Database on Protected Areas
-6. **Ramsar Sites** - Wetlands of International Importance
-7. **HydroBASINS** - Global watershed boundaries (levels 3-6)
-8. **iNaturalist** - Species occurrence range maps
-9. **Corruption Index 2024** - Transparency International data
-
-See [datasets.md](datasets.md) for detailed schema information.  This file is consumed directly by the LLM, additional datasets can be added by describing them here.  
-
-
-## Local Development
-
-
-You can also run the server locally
-
-
-Or install dependencies and run directly:
-
-```bash
-pip install -r requirements.txt
-python server.py
-```
-
-
-You can now connect to the server over localhost (note http not https here), e.g. in VSCode: 
-
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
-	"servers": {
-			"duckdb-geo": {
-			"url": "http://localhost:8000/mcp"
-		},
-	}
+  "mcpServers": {
+    "private-duckdb": {
+      "type": "http",
+      "url": "https://private-duckdb-mcp.nrp-nautilus.io/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
 }
 ```
 
-You can adjust the datasets and instructions to the LLM in the corresponding `.md` files (e.g. datasets.md).  You will need to adjust `query-setup.md` to run the server locally, as it uses endpoint and thread count that only work from inside our k8s cluster. 
-Running locally means your local CPU+network resources will be used for the computation, which will likely be much slower than the hosted k8s endpoint. 
+### VSCode
 
+Create `.vscode/mcp.json` in your project:
 
+```json
+{
+  "servers": {
+    "private-duckdb": {
+      "type": "http",
+      "url": "https://private-duckdb-mcp.nrp-nautilus.io/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+> **Security note:** Do not commit configuration files that contain the token. Add them to `.gitignore`.
+
+---
+
+## Available Datasets
+
+See [datasets.md](datasets.md) for full schema documentation. This file is embedded directly into the MCP tool description so the LLM uses it to guide query construction.
+
+1. **GYE Parcels** — Greater Yellowstone Ecosystem land parcels with easements, USDA program enrollment, and wildlife overlap (elk, mule deer, pronghorn crucial winter habitat). Stored at `s3://private-wyoming/gye-parcels/`.
+
+---
 
 ## Architecture
 
-We have a fully-hosted version 
+### S3 Credential Routing
+
+The server manages two separate S3 credential sets, applied per-query using DuckDB's secrets manager:
+
+| Secret name | Endpoint | Scope | Source |
+|---|---|---|---|
+| `nrp_s3` | `rook-ceph-rgw-nautiluss3.rook` (internal NRP) | all `s3://` paths | `mcp-private-secrets` k8s Secret |
+| `wyoming_s3` | `minio.carlboettiger.info` | `s3://private-wyoming` only | `mcp-private-wyoming-secrets` k8s Secret |
+
+DuckDB's `SCOPE` parameter ensures requests to `s3://private-wyoming/**` automatically route to the MinIO endpoint with the correct credentials, while all other S3 paths use the NRP Ceph endpoint.
 
 ### Core Components
 
-- **server.py** - Main MCP server with FastMCP framework
-- **stac.py** - STAC catalog integration for dynamic dataset discovery
-- **datasets.md** - Dataset catalog and schema documentation
-- **query-setup.md** - Required DuckDB configuration for all queries
-- **query-optimization.md** - Performance optimization guidelines
-- **h3-guide.md** - H3 geospatial operations reference
+- **`server.py`** — MCP server with `BearerTokenAuth` middleware and dual S3 secret injection
+- **`datasets.md`** — Dataset catalog injected into the LLM tool description
+- **`query-setup.md`** — DuckDB setup SQL (extensions, thread count, base S3 config)
+- **`query-optimization.md`** — Performance guidelines injected into tool description
+- **`h3-guide.md`** — H3 spatial indexing reference injected into tool description
+- **`k8s/`** — Kubernetes deployment manifests
 
 ### Key Design Patterns
 
-1. **Prompt Engineering**: Injects strict SQL rules into tool descriptions to guide LLM behavior
-2. **Isolation Engine**: Each query gets a fresh DuckDB connection for security
-3. **Context Injection**: Documentation is embedded into MCP resources and tool descriptions
-4. **Partition Pruning**: Uses H3 resolution columns (`h0`) for efficient S3 reads
+1. **Bearer token auth**: Pure ASGI middleware wraps the MCP app at startup; checks every non-OPTIONS HTTP request
+2. **Dual scoped secrets**: Per-query DuckDB `CREATE OR REPLACE SECRET` with `SCOPE` for bucket-level routing
+3. **Prompt engineering**: SQL rules, dataset catalog, and spatial guides are injected into the tool description so the LLM always has context
+4. **Query isolation**: Each query gets a fresh in-memory DuckDB connection — no state leaks between requests
+
+---
 
 ## Kubernetes Deployment
 
-Deploy to Kubernetes using the provided manifests:
+### Prerequisites
+
+Two k8s Secrets must exist in the `biodiversity` namespace before deploying.
+
+**`mcp-private-secrets`** — MCP auth token and NRP S3 credentials:
 
 ```bash
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/ingress.yaml
+kubectl create secret generic mcp-private-secrets \
+  --from-literal=aws-access-key-id=<nrp-key-id> \
+  --from-literal=aws-secret-access-key=<nrp-secret> \
+  --from-literal=mcp-auth-token=<bearer-token> \
+  -n biodiversity
 ```
 
-The deployment:
-- Runs 2 replicas for high availability
-- Allocates 16GB memory per pod for large queries
-- Uses `uv` for fast dependency installation
-- Includes readiness probes for safe rollouts
+To generate a strong bearer token: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
+
+**`mcp-private-wyoming-secrets`** — MinIO credentials for `private-wyoming` bucket:
+
+```bash
+kubectl create secret generic mcp-private-wyoming-secrets \
+  --from-literal=wyoming-s3-key-id=<minio-key-id> \
+  --from-literal=wyoming-s3-secret=<minio-secret> \
+  -n biodiversity
+```
+
+See [`k8s/secret-template.yaml`](k8s/secret-template.yaml) for the Secret manifest format.
+
+### Deploy
+
+```bash
+kubectl apply -f k8s/deployment.yaml -n biodiversity
+kubectl apply -f k8s/service.yaml -n biodiversity
+kubectl apply -f k8s/ingress.yaml -n biodiversity
+```
+
+### Update credentials
+
+To update a secret without recreating it (preserves other keys):
+
+```bash
+kubectl create secret generic mcp-private-secrets \
+  --from-literal=aws-access-key-id=<new-key> \
+  --from-literal=aws-secret-access-key=<new-secret> \
+  --from-literal=mcp-auth-token=<token> \
+  --dry-run=client -o yaml | kubectl apply -f - -n biodiversity
+
+kubectl rollout restart deployment/duckdb-mcp-private -n biodiversity
+```
+
+### Adding a new dataset
+
+1. Add data to S3 (NRP Ceph or MinIO as appropriate)
+2. If using a new S3 endpoint/bucket with credentials, add a new k8s Secret and wire it into `k8s/deployment.yaml` as env vars
+3. Add a scoped `CREATE OR REPLACE SECRET` in `get_isolated_db()` in `server.py`
+4. Document the dataset in `datasets.md` (schema, S3 path, join keys)
+5. Push and restart: `kubectl rollout restart deployment/duckdb-mcp-private -n biodiversity`
+
+---
+
+## MinIO User Management
+
+The `wyoming-app` service account on `minio.carlboettiger.info` has read/write access scoped to `private-wyoming` only. To manage it:
+
+```bash
+# List access keys
+mc admin accesskey list nvme wyoming-app
+
+# View current policy
+mc admin policy info nvme wyoming-app-policy
+
+# Update policy
+mc admin policy create nvme wyoming-app-policy policy.json
+mc admin policy detach nvme wyoming-app-policy --user wyoming-app
+mc admin policy attach nvme wyoming-app-policy --user wyoming-app
+```
+
+Note: When using `rclone` to write to this bucket, add `--s3-no-check-bucket` to prevent rclone from attempting to `PUT` (create) the bucket — which would fail because the service account does not have `s3:CreateBucket` permission.
+
+---
 
 ## MCP Protocol Features
 
 ### Tools
-
-- `query(sql_query)` - Execute DuckDB SQL with embedded optimization rules
+- `query(sql_query)` — Execute DuckDB SQL with embedded optimization rules and dataset catalog
 
 ### Resources
-
-*NOTE*: Some MCP clients, like in VSCode, do not recognize "resources" and "prompts".  Newer clients (Claude code, Continue.dev, Antigravity do) 
-
-- `catalog://list` - List all available datasets
-- `catalog://{name}` - Get detailed schema for a specific dataset
+- `catalog://list` — List all available datasets
+- `catalog://{name}` — Get detailed schema for a specific dataset
 
 ### Prompts
+- `geospatial-analyst` — Load complete geospatial analysis persona
 
-- `geospatial-analyst` - Load complete context for geospatial analysis persona
+> Note: Resources and Prompts are only visible in clients that support them (Claude Code, Continue.dev). VSCode's Copilot MCP integration currently only exposes Tools.
 
-## Query Optimization Tips
+---
 
-1. **Always include h0 in joins** - Enables partition pruning for 5-20x speedup
-2. **Use APPROX_COUNT_DISTINCT(h8)** - Fast area calculations with H3 hexagons
-3. **Filter small tables first** - Create CTEs to reduce join cardinality
-4. **Set THREADS=100** - Parallel S3 reads are I/O bound, not CPU bound
-5. **Enable object cache** - Reduces redundant S3 requests
+## Security Model
 
-See [query-optimization.md](query-optimization.md) for detailed guidance.
+| Layer | Mechanism |
+|---|---|
+| Request auth | Bearer token (`MCP_AUTH_TOKEN` env var), checked on every non-OPTIONS request |
+| S3 data access | Scoped per-bucket credentials from k8s Secrets, never exposed to callers |
+| Query isolation | Fresh in-memory DuckDB per request — no shared state |
+| Code secrecy | Repo is public; all secrets live exclusively in k8s Secrets |
+| Token storage | k8s Secret `mcp-private-secrets`, key `mcp-auth-token` |
 
-## H3 Spatial Operations
-
-All datasets use Uber's [H3 hexagonal grid system](https://h3geo.org) for spatial indexing:
-
-- Resolution 8 (h8): ~0.737 km² per hex
-- Resolution 0-4 (h0-h4): Coarser resolutions for global analysis
-- Use `h3_cell_to_parent()` to join datasets at different resolutions
-- Use `APPROX_COUNT_DISTINCT(h8) * 0.737327598` to calculate areas in km²
-
-## Testing
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/test_server.py
-
-# Run with coverage
-pytest --cov=. tests/
-```
-
-## Configuration
-
-### Environment Variables
-
-- `THREADS` - DuckDB thread count (default: 100 for S3 workloads)
-- `PORT` - HTTP server port (default: 8000)
-
-### DuckDB Settings
-
-Required settings are documented in [query-setup.md](query-setup.md) and automatically injected into query tool descriptions.
-
-## Security
-
-- **Stateless Design**: No persistent database or user data
-- **Read-Only Access**: Server only reads from public S3 buckets
-- **Query Isolation**: Each request gets a fresh DuckDB instance
-- **DNS Rebinding Protection**: Disabled for MCP HTTP mode
-
-
-## License
-
-MIT License - See repository for details
-
-## Contributing
-
-Contributions welcome! Key areas:
-- Additional dataset integrations
-- Query optimization patterns
-- STAC catalog enhancements
-- Documentation improvements
+---
 
 ## References
 
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [DuckDB Documentation](https://duckdb.org/docs/)
+- [DuckDB Secrets Manager](https://duckdb.org/docs/sql/statements/create_secret.html)
 - [H3 Geospatial Indexing](https://h3geo.org)
 - [FastMCP Framework](https://github.com/jlowin/fastmcp)
-- [STAC Specification](https://stacspec.org/)
-
-## Support
-
-For issues and questions:
-- GitHub Issues: [boettiger-lab/mcp-data-server](https://github.com/boettiger-lab/mcp-data-server)
-- Dataset questions: See [datasets.md](datasets.md) for data sources
-
-
