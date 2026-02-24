@@ -38,6 +38,16 @@ spec:
             secretKeyRef:
               name: mcp-private-secrets
               key: mcp-auth-token
+        - name: WYOMING_S3_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mcp-private-wyoming-secrets
+              key: wyoming-s3-key-id
+        - name: WYOMING_S3_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-private-wyoming-secrets
+              key: wyoming-s3-secret
         resources:
           requests:
             memory: 16Gi

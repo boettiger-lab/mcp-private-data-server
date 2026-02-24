@@ -46,6 +46,10 @@ ROLE_RAW = load_text_file("assistant-role.md")
 S3_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
 S3_SECRET_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 
+# Wyoming MinIO credentials — scoped to s3://private-wyoming
+WYOMING_S3_KEY_ID = os.environ.get("WYOMING_S3_KEY_ID", "")
+WYOMING_S3_SECRET = os.environ.get("WYOMING_S3_SECRET", "")
+
 # -------------------------------------------------------------------------
 # 3. CONTEXT INJECTION (PROMPT ENGINEERING)
 # -------------------------------------------------------------------------
@@ -77,17 +81,29 @@ def get_isolated_db():
     conn = duckdb.connect(database=":memory:")
     try:
         if SETUP_SQL: conn.sql(SETUP_SQL)
-        # Always override S3 credentials from environment variables.
+        # Default NRP S3 secret (no scope = catches all s3:// paths not matched below).
         # Runs after SETUP_SQL so env vars are the unconditional source of truth.
-        # Set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the k8s Secret.
         key_id = S3_KEY_ID.replace("'", "''")
         secret = S3_SECRET_KEY.replace("'", "''")
         conn.sql(
-            f"CREATE OR REPLACE SECRET s3 (TYPE S3, "
+            f"CREATE OR REPLACE SECRET nrp_s3 (TYPE S3, "
             f"ENDPOINT 'rook-ceph-rgw-nautiluss3.rook', "
             f"URL_STYLE 'path', USE_SSL 'false', "
             f"KEY_ID '{key_id}', SECRET '{secret}');"
         )
+
+        # Scoped Wyoming secret — routes s3://private-wyoming/** to MinIO.
+        # Takes precedence over the default secret for that prefix.
+        if WYOMING_S3_KEY_ID:
+            wy_key = WYOMING_S3_KEY_ID.replace("'", "''")
+            wy_secret = WYOMING_S3_SECRET.replace("'", "''")
+            conn.sql(
+                f"CREATE OR REPLACE SECRET wyoming_s3 (TYPE S3, "
+                f"KEY_ID '{wy_key}', SECRET '{wy_secret}', "
+                f"ENDPOINT 'minio.carlboettiger.info', "
+                f"URL_STYLE 'path', USE_SSL 'true', "
+                f"SCOPE 's3://private-wyoming');"
+            )
         yield conn
     finally:
         conn.close()
