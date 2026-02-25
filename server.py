@@ -196,12 +196,12 @@ class BearerTokenAuth:
                 headers = dict(scope.get("headers", []))
                 auth = headers.get(b"authorization", b"").decode()
                 if not (auth.startswith("Bearer ") and auth[7:] == self.token):
+                    print(f"🚫 AUTH REJECTED: method={method} auth_header={'<empty>' if not auth else repr(auth[:40]+'...' if len(auth)>40 else auth)} all_header_names={[k.decode() for k,v in scope.get('headers',[])]}", file=sys.stderr)
                     await send({
                         "type": "http.response.start",
                         "status": 401,
                         "headers": [
                             (b"content-type", b"application/json"),
-                            (b"www-authenticate", b'Bearer realm="MCP"'),
                         ],
                     })
                     await send({
